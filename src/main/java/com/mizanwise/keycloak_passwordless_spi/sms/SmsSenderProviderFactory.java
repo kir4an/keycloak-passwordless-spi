@@ -21,7 +21,8 @@ public class SmsSenderProviderFactory {
         if (provider == null || provider.isEmpty()) {
             return null;
         }
-        SmsProviderType smsProviderType = SmsProviderType.valueOf(provider.trim().toLowerCase());
+        SmsProviderType smsProviderType = SmsProviderType.valueOf(provider.trim().toUpperCase());
+
         return get(smsProviderType);
     }
 
