@@ -4,11 +4,10 @@ import com.mizanwise.keycloak_passwordless_spi.otp.OtpRequest;
 import com.mizanwise.keycloak_passwordless_spi.otp.OtpSenderProvider;
 import com.mizanwise.keycloak_passwordless_spi.otp.OtpSendingException;
 import org.keycloak.authentication.AuthenticationFlowContext;
+import org.keycloak.email.EmailException;
 import org.keycloak.email.EmailSenderProvider;
-import org.keycloak.email.EmailTemplateProvider;
 import org.keycloak.models.RealmModel;
 
-import java.lang.reflect.Method;
 import java.util.Map;
 
 import static com.mizanwise.keycloak_passwordless_spi.OtpAuthenticatorFactory.PROP_SMS_TPL;
@@ -28,30 +27,19 @@ public class EmailOtpSender implements OtpSenderProvider {
     public void sendOtp(AuthenticationFlowContext ctx, OtpRequest request) throws OtpSendingException {
         String message = template.replace(ARG_CODE, request.getCode());
 
-        EmailTemplateProvider emailTemplate = ctx.getSession().getProvider(EmailTemplateProvider.class);
-        if (emailTemplate != null) {
-            emailTemplate.setRealm(ctx.getRealm());
-        }
-
         EmailSenderProvider sender = ctx.getSession().getProvider(EmailSenderProvider.class);
         if (sender == null) {
             throw new OtpSendingException("EmailSenderProvider not available");
         }
 
-        try {
-            sendToAddress(sender, ctx.getRealm(), request.getDestination(), SUBJECT, message);
-        } catch (Exception e) {
-            throw new OtpSendingException("Failed to send email OTP", e);
-        }
-    }
+        RealmModel realm = ctx.getRealm();
+        String address = request.getDestination();
 
-    private void sendToAddress(EmailSenderProvider sender,
-                               RealmModel realm,
-                               String address,
-                               String subject,
-                               String textBody) throws Exception {
-        Method method = sender.getClass()
-                .getMethod("send", RealmModel.class, String.class, String.class, String.class, String.class);
-        method.invoke(sender, realm, address, subject, textBody, textBody);
+        try {
+            // Keycloak 26: config берём из realm SMTP settings
+            sender.send(realm.getSmtpConfig(), address, SUBJECT, message, message);
+        } catch (EmailException e) {
+            throw new OtpSendingException("Failed to send email OTP to " + address + ": " + e.getMessage(), e);
+        }
     }
 }
