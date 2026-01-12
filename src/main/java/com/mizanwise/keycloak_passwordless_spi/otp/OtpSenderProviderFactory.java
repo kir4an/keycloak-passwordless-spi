@@ -1,8 +1,7 @@
 package com.mizanwise.keycloak_passwordless_spi.otp;
 
+import com.mizanwise.keycloak_passwordless_spi.email.EmailOtpSender;
 import com.mizanwise.keycloak_passwordless_spi.sms.SmsOtpSender;
-import com.mizanwise.keycloak_passwordless_spi.sms.SmsSenderProvider;
-import com.mizanwise.keycloak_passwordless_spi.sms.SmsSenderProviderFactory;
 
 import java.util.Collections;
 import java.util.EnumMap;
@@ -22,6 +21,7 @@ public class OtpSenderProviderFactory {
 
         // Dynamically register OTP sender providers based on configuration
         map.put(OtpChannel.SMS, new SmsOtpSender(cfg));
+        map.put(OtpChannel.EMAIL, new EmailOtpSender(cfg));
 
         // Future: register other channel providers here (EMAIL, PUSH, etc.)
         // e.g., map.put(OtpChannel.EMAIL, new EmailOtpSender(...));
@@ -40,7 +40,13 @@ public class OtpSenderProviderFactory {
      * Lookup provider by channel. Returns null if none registered.
      */
     public OtpSenderProvider get(OtpChannel channel) {
-        return providers.get(channel);
+        OtpSenderProvider provider = providers.get(channel);
+        if (provider == null) {
+            throw new IllegalStateException(String.format(
+                    "No OTP sender provider registered for channel %s. Available: %s. Config: %s",
+                    channel, providers.keySet(), config));
+        }
+        return provider;
     }
 
     /**

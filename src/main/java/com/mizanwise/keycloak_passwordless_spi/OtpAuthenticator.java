@@ -3,7 +3,6 @@ package com.mizanwise.keycloak_passwordless_spi;
 import com.mizanwise.keycloak_passwordless_spi.otp.OtpChannel;
 import com.mizanwise.keycloak_passwordless_spi.otp.OtpRequest;
 import com.mizanwise.keycloak_passwordless_spi.otp.OtpSenderProviderFactory;
-import com.mizanwise.keycloak_passwordless_spi.otp.OtpSendingException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.MultivaluedMap;
 import jakarta.ws.rs.core.Response;
@@ -88,6 +87,7 @@ public class OtpAuthenticator implements Authenticator {
 
                 OtpSenderProviderFactory.getInstance(cfg).get(otpChannel)
                         .sendOtp(
+                                ctx,
                                 OtpRequest.builder()
                                         .destination(phone)
                                         .code(code)

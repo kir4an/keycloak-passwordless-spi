@@ -1,6 +1,7 @@
 package com.mizanwise.keycloak_passwordless_spi.sms;
 
 import com.mizanwise.keycloak_passwordless_spi.otp.*;
+import org.keycloak.authentication.AuthenticationFlowContext;
 
 import java.util.Map;
 
@@ -22,7 +23,7 @@ public class SmsOtpSender implements OtpSenderProvider {
     }
 
     @Override
-    public void sendOtp(OtpRequest request) throws OtpSendingException {
+    public void sendOtp(AuthenticationFlowContext ctx, OtpRequest request) throws OtpSendingException {
         try {
             String message = template.replace(ARG_CODE, request.getCode());
             delegate.sendSms(request.getDestination(), message);
