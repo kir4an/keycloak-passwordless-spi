@@ -108,12 +108,17 @@ public class OtpAuthenticator implements Authenticator {
             return;
         }
 
-        // Verify the OTP real stored or fake OTP
+        /// Verify the OTP real stored or fake OTP
         String expected = ctx.getAuthenticationSession().getAuthNote("otp");
         String issuingTime = ctx.getAuthenticationSession().getAuthNote("otp_issuing_time");
         Instant issuedAt = Instant.ofEpochMilli(Long.parseLong(issuingTime));
-        boolean isExpired = issuedAt.plus(otpExp, ChronoUnit.MINUTES).isBefore(Instant.now());
+
+        // ИСПРАВЛЕНО: правильная проверка истечения срока
+        boolean isExpired = Instant.now()
+                .isAfter(issuedAt.plus(otpExp, ChronoUnit.MINUTES));
+
         boolean valid = otp.equals(expected) || (developmentMode && FAKE_OTP.equals(otp));
+
         if (!valid || isExpired) {
             Response page = ctx.form()
                     .setAttribute("phone", phone)
