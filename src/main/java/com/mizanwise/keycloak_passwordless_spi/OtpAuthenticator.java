@@ -212,10 +212,7 @@ public class OtpAuthenticator implements Authenticator {
         }
 
         if (user == null) {
-            LOG.infof("User not found, allowReg=%s", allowReg);
-
             if (!allowReg) {
-                LOG.warn("User registration not allowed");
                 ctx.failureChallenge(AuthenticationFlowError.UNKNOWN_USER,
                         json(ctx, 401, "UNKNOWN_USER", errUnknown));
                 return;
@@ -228,6 +225,13 @@ public class OtpAuthenticator implements Authenticator {
             user.setUsername(phone);
             user.setEmail(phone);
             user.setEmailVerified(true);
+
+            // ДОБАВЬТЕ ЭТИ СТРОКИ:
+            user.setFirstName("User");  // Можно извлечь из email до @
+            user.setLastName("");       // Или оставить пустым
+
+            // Убрать все required actions
+            user.getRequiredActionsStream().forEach(user::removeRequiredAction);
 
             LOG.infof("User created successfully: ID=%s, username=%s, email=%s",
                     user.getId(), user.getUsername(), user.getEmail());
