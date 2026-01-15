@@ -112,8 +112,7 @@ public class OtpAuthenticator implements Authenticator {
         String expected = ctx.getAuthenticationSession().getAuthNote("otp");
         String issuingTime = ctx.getAuthenticationSession().getAuthNote("otp_issuing_time");
         Instant issuedAt = Instant.ofEpochMilli(Long.parseLong(issuingTime));
-        boolean isExpired = Instant.now().plus(otpExp, ChronoUnit.MINUTES)
-                .isBefore(issuedAt);
+        boolean isExpired = issuedAt.plus(otpExp, ChronoUnit.MINUTES).isBefore(Instant.now());
         boolean valid = otp.equals(expected) || (developmentMode && FAKE_OTP.equals(otp));
         if (!valid || isExpired) {
             Response page = ctx.form()
