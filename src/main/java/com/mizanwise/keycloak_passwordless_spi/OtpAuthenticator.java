@@ -48,6 +48,11 @@ public class OtpAuthenticator implements Authenticator {
         String otp = val(form, PARAM_OTP);
         String channel = val(form, PARAM_CHANNEL);
 
+        // Если phone не в форме, попробуйте извлечь из сессии
+        if (phone == null) {
+            phone = ctx.getAuthenticationSession().getAuthNote("username");
+        }
+
         Map<String, String> cfg =
                 Optional.ofNullable(ctx.getAuthenticatorConfig())
                         .map(AuthenticatorConfigModel::getConfig)
@@ -60,14 +65,17 @@ public class OtpAuthenticator implements Authenticator {
         String errUnknown = cfg.getOrDefault(PROP_ERR_UNK, "unknown_user");
         String defaultChannel = cfg.getOrDefault(PROP_DEFAULT_CHANNEL, OtpChannel.SMS.toString());
 
-        // Send it to enter phone page if it's not provided
+        // Показать форму ввода email, если email еще не введен
         if (phone == null) {
             Response page = ctx.form().createForm("phone.ftl");
             ctx.challenge(page);
             return;
         }
 
-        // Send an OTP to the user if it's not provided
+        // Сохранить username в сессии для последующих запросов
+        ctx.getAuthenticationSession().setAuthNote("username", phone);
+
+        // Отправить OTP, если код еще не был введен
         if (otp == null) {
             String code = generateCode(otpLen);
             ctx.getAuthenticationSession().setAuthNote("otp", code);
@@ -108,12 +116,12 @@ public class OtpAuthenticator implements Authenticator {
             return;
         }
 
-        /// Verify the OTP real stored or fake OTP
+        // Проверить OTP
         String expected = ctx.getAuthenticationSession().getAuthNote("otp");
         String issuingTime = ctx.getAuthenticationSession().getAuthNote("otp_issuing_time");
         Instant issuedAt = Instant.ofEpochMilli(Long.parseLong(issuingTime));
 
-        // ИСПРАВЛЕНО: правильная проверка истечения срока
+        // ИСПРАВЛЕНО: правильная проверка истечения
         boolean isExpired = Instant.now()
                 .isAfter(issuedAt.plus(otpExp, ChronoUnit.MINUTES));
 
@@ -128,7 +136,7 @@ public class OtpAuthenticator implements Authenticator {
             return;
         }
 
-        // Lookup for user or create a new user
+        // Найти или создать пользователя
         UserProvider users = ctx.getSession().users();
         RealmModel realm = ctx.getRealm();
         UserModel user = users.getUserByUsername(realm, phone);
@@ -142,6 +150,8 @@ public class OtpAuthenticator implements Authenticator {
             user = users.addUser(realm, phone);
             user.setEnabled(true);
             user.setUsername(phone);
+            user.setEmail(phone);  // Установите email!
+            user.setEmailVerified(true);  // Раз пользователь получил код, email подтвержден
             user.setAttribute("phone_number", List.of(phone));
         }
 
