@@ -43,14 +43,25 @@ public class OtpAuthenticator implements Authenticator {
     }
 
     private void process(AuthenticationFlowContext ctx) {
+        LOG.infof("=== OTP PROCESS START ===");
+        LOG.infof("Session ID: %s", ctx.getAuthenticationSession().getParentSession().getId());
+        LOG.infof("Tab ID: %s", ctx.getAuthenticationSession().getTabId());
+        LOG.infof("Execution ID: %s", ctx.getExecution().getId());
+
         MultivaluedMap<String, String> form = ctx.getHttpRequest().getDecodedFormParameters();
         String phone = val(form, PARAM_USERNAME);
         String otp = val(form, PARAM_OTP);
         String channel = val(form, PARAM_CHANNEL);
 
-        // Если phone не в форме, попробуйте извлечь из сессии
+        LOG.infof("Form params - username: %s, otp: %s, channel: %s",
+                phone != null ? phone : "NULL",
+                otp != null ? "***" : "NULL",
+                channel != null ? channel : "NULL");
+
+        // Если phone не в форме, извлечь из сессии
         if (phone == null) {
             phone = ctx.getAuthenticationSession().getAuthNote("username");
+            LOG.infof("Retrieved username from session: %s", phone != null ? phone : "NULL");
         }
 
         Map<String, String> cfg =
@@ -65,8 +76,12 @@ public class OtpAuthenticator implements Authenticator {
         String errUnknown = cfg.getOrDefault(PROP_ERR_UNK, "unknown_user");
         String defaultChannel = cfg.getOrDefault(PROP_DEFAULT_CHANNEL, OtpChannel.SMS.toString());
 
-        // Показать форму ввода email, если email еще не введен
-        if (phone == null) {
+        LOG.infof("Config - developmentMode: %s, otpLen: %d, otpExp: %d, allowReg: %s",
+                developmentMode, otpLen, otpExp, allowReg);
+
+        // Показать форму ввода email, если email не введен
+        if (phone == null || phone.trim().isEmpty()) {
+            LOG.info("No username provided, showing phone.ftl");
             Response page = ctx.form().createForm("phone.ftl");
             ctx.challenge(page);
             return;
@@ -74,24 +89,34 @@ public class OtpAuthenticator implements Authenticator {
 
         // Сохранить username в сессии для последующих запросов
         ctx.getAuthenticationSession().setAuthNote("username", phone);
+        LOG.infof("Saved username to session: %s", phone);
 
-        // Отправить OTP, если код еще не был введен
-        if (otp == null) {
+        // Отправить OTP, если код еще не введен
+        if (otp == null || otp.trim().isEmpty()) {
+            LOG.info("No OTP provided, generating and sending code");
+
             String code = generateCode(otpLen);
             ctx.getAuthenticationSession().setAuthNote("otp", code);
             ctx.getAuthenticationSession().setAuthNote("otp_issuing_time", Instant.now().toEpochMilli() + "");
+
+            LOG.infof("Generated OTP code: %s (saved to session)", code);
 
             try {
                 if (channel == null || channel.isEmpty()) {
                     channel = defaultChannel;
                 }
-                OtpChannel otpChannel = OtpChannel.fromString(channel.trim().toUpperCase());
+
+                OtpChannel otpChannel = OtpChannel.fromString(channel);
                 if (otpChannel == null) {
                     LOG.errorf("Unknown OTP channel: %s", channel);
-                    Response page = ctx.form().createForm("phone.ftl");
+                    Response page = ctx.form()
+                            .setError("Invalid channel: " + channel)
+                            .createForm("phone.ftl");
                     ctx.failureChallenge(AuthenticationFlowError.INTERNAL_ERROR, page);
                     return;
                 }
+
+                LOG.infof("Sending OTP via channel: %s to: %s", otpChannel, phone);
 
                 OtpSenderProviderFactory.getInstance(cfg).get(otpChannel)
                         .sendOtp(
@@ -101,62 +126,123 @@ public class OtpAuthenticator implements Authenticator {
                                         .code(code)
                                         .build()
                         );
+
+                LOG.infof("OTP sent successfully to %s", phone);
+
             } catch (Exception e) {
-                LOG.errorf("Failed to send OTP to %s: %s", phone, e.getMessage());
-                Response page = ctx.form().createForm("phone.ftl");
+                LOG.errorf(e, "Failed to send OTP to %s", phone);
+                Response page = ctx.form()
+                        .setError("Failed to send verification code. Please try again.")
+                        .createForm("phone.ftl");
                 ctx.failureChallenge(AuthenticationFlowError.INTERNAL_ERROR, page);
                 return;
             }
 
             Response page = ctx.form()
                     .setAttribute("phone", phone)
+                    .setAttribute("channel", channel)
                     .createForm("otp.ftl");
             ctx.challenge(page);
-
+            LOG.info("Showing otp.ftl form");
             return;
         }
 
         // Проверить OTP
+        LOG.info("Verifying OTP code");
+
         String expected = ctx.getAuthenticationSession().getAuthNote("otp");
         String issuingTime = ctx.getAuthenticationSession().getAuthNote("otp_issuing_time");
-        Instant issuedAt = Instant.ofEpochMilli(Long.parseLong(issuingTime));
 
-        // ИСПРАВЛЕНО: правильная проверка истечения
-        boolean isExpired = Instant.now()
-                .isAfter(issuedAt.plus(otpExp, ChronoUnit.MINUTES));
+        LOG.infof("Expected OTP: %s, Provided OTP: %s", expected, otp);
+        LOG.infof("Issuing time from session: %s", issuingTime);
 
-        boolean valid = otp.equals(expected) || (developmentMode && FAKE_OTP.equals(otp));
-
-        if (!valid || isExpired) {
+        if (expected == null || issuingTime == null) {
+            LOG.error("OTP or issuing time not found in session - session may have been lost");
             Response page = ctx.form()
                     .setAttribute("phone", phone)
-                    .setError("Invalid code")
+                    .setError("Session expired. Please start over.")
+                    .createForm("phone.ftl");
+            ctx.failureChallenge(AuthenticationFlowError.EXPIRED_CODE, page);
+            return;
+        }
+
+        Instant issuedAt = Instant.ofEpochMilli(Long.parseLong(issuingTime));
+        Instant expiresAt = issuedAt.plus(otpExp, ChronoUnit.MINUTES);
+        Instant now = Instant.now();
+
+        boolean isExpired = now.isAfter(expiresAt);
+        boolean valid = otp.equals(expected) || (developmentMode && FAKE_OTP.equals(otp));
+
+        LOG.infof("OTP validation - valid: %s, isExpired: %s (issued: %s, expires: %s, now: %s)",
+                valid, isExpired, issuedAt, expiresAt, now);
+
+        if (!valid) {
+            LOG.warn("OTP code mismatch");
+            Response page = ctx.form()
+                    .setAttribute("phone", phone)
+                    .setError("Invalid verification code")
                     .createForm("otp.ftl");
             ctx.failureChallenge(AuthenticationFlowError.INVALID_CREDENTIALS, page);
             return;
         }
 
+        if (isExpired) {
+            LOG.warn("OTP code expired");
+            Response page = ctx.form()
+                    .setAttribute("phone", phone)
+                    .setError("Verification code expired. Please request a new one.")
+                    .createForm("phone.ftl");
+            ctx.failureChallenge(AuthenticationFlowError.EXPIRED_CODE, page);
+            return;
+        }
+
         // Найти или создать пользователя
+        LOG.infof("Looking up user by email: %s", phone);
+
         UserProvider users = ctx.getSession().users();
         RealmModel realm = ctx.getRealm();
-        UserModel user = users.getUserByUsername(realm, phone);
+
+        // Сначала ищем по email
+        UserModel user = users.getUserByEmail(realm, phone);
+
+        // Если не найден, пробуем по username
+        if (user == null) {
+            LOG.infof("User not found by email, trying username");
+            user = users.getUserByUsername(realm, phone);
+        }
 
         if (user == null) {
+            LOG.infof("User not found, allowReg=%s", allowReg);
+
             if (!allowReg) {
+                LOG.warn("User registration not allowed");
                 ctx.failureChallenge(AuthenticationFlowError.UNKNOWN_USER,
                         json(ctx, 401, "UNKNOWN_USER", errUnknown));
                 return;
             }
+
+            LOG.infof("Creating new user with username/email: %s", phone);
+
             user = users.addUser(realm, phone);
             user.setEnabled(true);
             user.setUsername(phone);
-            user.setEmail(phone);  // Установите email!
-            user.setEmailVerified(true);  // Раз пользователь получил код, email подтвержден
-            user.setAttribute("phone_number", List.of(phone));
+            user.setEmail(phone);
+            user.setEmailVerified(true);
+
+            LOG.infof("User created successfully: ID=%s, username=%s, email=%s",
+                    user.getId(), user.getUsername(), user.getEmail());
+        } else {
+            LOG.infof("User found: ID=%s, username=%s, email=%s",
+                    user.getId(), user.getUsername(), user.getEmail());
         }
 
+        // Устанавливаем пользователя в контекст
         ctx.setUser(user);
+        LOG.infof("User set in context: %s", user.getUsername());
+
+        // Завершаем аутентификацию успешно
         ctx.success();
+        LOG.infof("=== OTP PROCESS SUCCESS ===");
     }
 
     private static Response json(AuthenticationFlowContext ctx, int status, String action, String code) {
@@ -195,16 +281,20 @@ public class OtpAuthenticator implements Authenticator {
 
     @Override
     public boolean requiresUser() {
-        return false;
+        LOG.info("requiresUser() called - returning false");
+        return false;  // КРИТИЧНО: false, так как мы создаем пользователя внутри
     }
 
     @Override
     public boolean configuredFor(KeycloakSession s, RealmModel r, UserModel u) {
-        return true;
+        LOG.infof("configuredFor() called for user: %s", u != null ? u.getUsername() : "null");
+        return true;  // КРИТИЧНО: всегда true
     }
 
     @Override
     public void setRequiredActions(KeycloakSession s, RealmModel r, UserModel u) {
+        LOG.infof("setRequiredActions() called for user: %s", u != null ? u.getUsername() : "null");
+        // Ничего не делаем - не добавляем required actions
     }
 
     @Override
